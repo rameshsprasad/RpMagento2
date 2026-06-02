@@ -1,13 +1,13 @@
 {
-    "name": "magento/module-module-order-import",
-    "description": "N/A",
+    "name": "magento/module-rpmag-order-import",
+    "description": "RP Order Import Module - CSV Order Import for Magento 2",
     "require": {
-        "php": "7.0.2|7.0.4|~7.0.6|~7.1.0",
-        "magento/module-sales": "100.3.*",
-        "magento/module-sample-data": "100.3.*"
+        "php": "~7.4 || ~8.0 || ~8.1 || ~8.2 || ~8.3",
+        "magento/module-sales": "103.0.* || 104.0.*",
+        "magento/framework": "103.0.* || 104.0.*"
     },
     "type": "magento2-module",
-    "version": "100.3.0-dev",
+    "version": "3.0.0",
     "license": [
         "OSL-3.0",
         "AFL-3.0"
