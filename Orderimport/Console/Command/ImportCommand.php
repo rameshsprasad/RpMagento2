@@ -3,6 +3,8 @@
  * RP Order Import
  * Ramesh Prasad
  * Email: rameshsprasad@gmail.com
+ *
+ * Updated for Magento 2.4.9 Compatibility
  */
 
 namespace RpMagento2\Orderimport\Console\Command;
@@ -10,34 +12,33 @@ namespace RpMagento2\Orderimport\Console\Command;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
-use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Filesystem\Exception\FileNotFoundException;
+use Magento\Framework\ObjectManagerInterface;
+use Magento\Framework\App\State;
 
 /**
  * Class ImportCommand
- *
- * @package CedricBlondeau\CatalogImportCommand\Console\Command
  */
 class ImportCommand extends Command
 {
     /**
-     * @var \Magento\Framework\ObjectManagerInterface
+     * @var ObjectManagerInterface
      */
-    private $objectManager;
+    private ObjectManagerInterface $objectManager;
 
     /**
-     * @var \Magento\Framework\App\State
+     * @var State
      */
-    private $state;
+    private State $state;
 
     /**
-     * @param \Magento\Framework\ObjectManagerInterface $objectManager
-     * @param \Magento\Framework\App\State $state
+     * @param ObjectManagerInterface $objectManager
+     * @param State $state
      */
     public function __construct(
-        \Magento\Framework\ObjectManagerInterface $objectManager,
-        \Magento\Framework\App\State $state
+        ObjectManagerInterface $objectManager,
+        State $state
     ) {
         $this->objectManager = $objectManager;
         $this->state = $state;
@@ -47,10 +48,10 @@ class ImportCommand extends Command
     /**
      * {@inheritdoc}
      */
-    protected function configure()
+    protected function configure(): void
     {
-        $this->setName('kenorder:import')
-            ->setDescription('Import Orders')
+        $this->setName('rporder:import')
+            ->setDescription('Import Orders from CSV File')
             ->addArgument('filename', InputArgument::REQUIRED, "CSV file path");
         parent::configure();
     }
@@ -58,25 +59,36 @@ class ImportCommand extends Command
     /**
      * {@inheritdoc}
      */
-    protected function execute(InputInterface $input, OutputInterface $output)
+    protected function execute(InputInterface $input, OutputInterface $output): int
     {
-        $import = $this->getImportModel();
-        $output->writeln($input->getArgument('filename'));
-        $conn = $this->objectManager->create('\Magento\Framework\App\ResourceConnection')->getConnection();;
         try {
-            $result = $import->execute(realpath($input->getArgument('filename')),$conn);
+            $import = $this->getImportModel();
+            $filename = $input->getArgument('filename');
+            $output->writeln("<info>Starting import from: {$filename}</info>");
+            
+            $conn = $this->objectManager
+                ->create('\\Magento\\Framework\\App\\ResourceConnection')
+                ->getConnection();
+            
+            $result = $import->execute(realpath($filename), $conn);
+            
             if ($result) {
-                $output->writeln('<info>The import was successful.</info>');
+                $output->writeln('<info>✓ The import was successful.</info>');
+                return Command::SUCCESS;
             } else {
-                $output->writeln('<error>Import failed.</error>');
+                $output->writeln('<error>✗ Import failed.</error>');
+                return Command::FAILURE;
             }
-
         } catch (FileNotFoundException $e) {
-            $output->writeln('<error>File not found.</error>');
-
+            $output->writeln('<error>✗ File not found.</error>');
+            return Command::FAILURE;
         } catch (\InvalidArgumentException $e) {
-            $output->writeln('<error>Invalid source.</error>');
-            $output->writeln("Log trace:");
+            $output->writeln('<error>✗ Invalid source.</error>');
+            $output->writeln("<error>Error: {$e->getMessage()}</error>");
+            return Command::FAILURE;
+        } catch (\Exception $e) {
+            $output->writeln("<error>✗ An error occurred: {$e->getMessage()}</error>");
+            return Command::FAILURE;
         }
     }
 
@@ -86,7 +98,6 @@ class ImportCommand extends Command
     protected function getImportModel()
     {
         $this->state->setAreaCode('adminhtml');
-        return $this->objectManager->create('RpMagento2\Orderimport\Model\Import');
+        return $this->objectManager->create('RpMagento2\\Orderimport\\Model\\Import');
     }
 }
-

@@ -3,62 +3,60 @@
  * RP Order Import
  * Ramesh Prasad
  * Email: rameshsprasad@gmail.com
+ *
+ * Updated for Magento 2.4.9 Compatibility
  */
 namespace RpMagento2\Orderimport\Model;
 
-use Magento\Framework\Setup\SampleData\Context as SampleDataContext;
+use Magento\Framework\File\Csv;
+use Magento\Customer\Api\CustomerRepositoryInterface;
+use Magento\Sales\Model\ResourceModel\Order\CollectionFactory;
 
 /**
- * Class Order
+ * Class Import
  */
 class Import
 {
     /**
-     * @var \Magento\Framework\File\Csv
+     * @var Csv
      */
-    protected $csvReader;
-
-    /**
-     * @var \Magento\Framework\Setup\SampleData\FixtureManager
-     */
-    protected $fixtureManager;
+    private Csv $csvReader;
 
     /**
      * @var Order\Converter
      */
-    protected $converter;
+    private Order\Converter $converter;
 
     /**
      * @var Order\Processor
      */
-    protected $orderProcessor;
+    private Order\Processor $orderProcessor;
 
     /**
-     * @var \Magento\Sales\Model\ResourceModel\Order\CollectionFactory
+     * @var CollectionFactory
      */
-    protected $orderCollectionFactory;
+    private CollectionFactory $orderCollectionFactory;
 
     /**
-     * @var \Magento\Customer\Api\CustomerRepositoryInterface
+     * @var CustomerRepositoryInterface
      */
-    protected $customerRepository;
+    private CustomerRepositoryInterface $customerRepository;
 
     /**
-     * @param SampleDataContext $sampleDataContext
+     * @param Csv $csvReader
      * @param Order\Converter $converter
      * @param Order\Processor $orderProcessor
-     * @param \Magento\Sales\Model\ResourceModel\Order\CollectionFactory $orderCollectionFactory
-     * @param \Magento\Customer\Api\CustomerRepositoryInterface $customerRepository
+     * @param CollectionFactory $orderCollectionFactory
+     * @param CustomerRepositoryInterface $customerRepository
      */
     public function __construct(
-        SampleDataContext $sampleDataContext,
+        Csv $csvReader,
         Order\Converter $converter,
         Order\Processor $orderProcessor,
-        \Magento\Sales\Model\ResourceModel\Order\CollectionFactory $orderCollectionFactory,
-        \Magento\Customer\Api\CustomerRepositoryInterface $customerRepository
+        CollectionFactory $orderCollectionFactory,
+        CustomerRepositoryInterface $customerRepository
     ) {
-        $this->fixtureManager = $sampleDataContext->getFixtureManager();
-        $this->csvReader = $sampleDataContext->getCsvReader();
+        $this->csvReader = $csvReader;
         $this->converter = $converter;
         $this->orderProcessor = $orderProcessor;
         $this->orderCollectionFactory = $orderCollectionFactory;
@@ -66,48 +64,96 @@ class Import
     }
 
     /**
-     * {@inheritdoc}
+     * Execute import from CSV file
+     *
+     * @param string $file
+     * @param \Magento\Framework\DB\Adapter\AdapterInterface $connection
+     * @return bool
+     * @throws \Exception
      */
-    public function execute($file,$connection)
+    public function execute(string $file, $connection): bool
     {
-        if (file_exists($file)) {
-            $rows = $this->csvReader->getData($file);
-            $header = array_shift($rows);
-            $rows = $connection->fetchAll('select * from OrderDataOct162017');
-            $isFirst = true;
-            $orderData= array();
-            /*foreach ($rows as $row) {
-                $data = [];
-                foreach ($row as $key => $value) {
-                    $data[$header[$key]] = $value;
-                }
-                $row = $data;   
-                $orderData[$row['Order Number']][] = $row;             
-            }*/
-            foreach ($rows as $row) {
-                $orderData[$row['OrderNumber']][] = $row;             
-            }
-            $finalOrderData = array();
-            foreach($orderData as $key => $oData){
-                $finalOrderData['order_id'] = $key;                
-                $finalOrderData['product_data'] = array();
-                $finalOrderData['customer_email'] = '';
-                foreach($oData as $iData){
-                     $finalOrderData['product_data'][] = array('sku' => $iData['InventoryID'],'qty' => $iData['Quantity'],'name' => $iData['ProductName'],'price' => $iData['UnitPrice'],'weight' => $iData['Weight'],'default_price' => $iData['DefaultPrice']);
-                     $finalOrderData['customer_email'] = $iData['S_Email'] != '' ? $iData['S_Email'] : $iData['S_Email'];
-                     $finalOrderData['customer_email'] = $finalOrderData['customer_email'] != '' ? $finalOrderData['customer_email'] : $iData['B_Email'];
-                     $finalOrderData['otherData'] = $iData;
-                }
-                $orderLastId = '';
-                $order = $connection->select()->from(['o' => 'sales_order'])
-		                    ->where('o.increment_id = ?', $key);
-		$orderLastId = $connection->fetchOne($order); 
-                if($orderLastId || $finalOrderData['otherData']['S_ShipVia'] == ''){
-                   continue;
-                }   
-                $this->orderProcessor->createOrder($finalOrderData,$connection);
-            }
+        if (!file_exists($file)) {
+            throw new \Exception("File does not exist: {$file}");
         }
-        return true;
+
+        try {
+            $rows = $this->csvReader->getData($file);
+            array_shift($rows); // Remove header
+
+            if (empty($rows)) {
+                throw new \Exception("CSV file is empty or has no data rows");
+            }
+
+            // Fetch order data from source table
+            $sourceRows = $connection->fetchAll('SELECT * FROM OrderDataOct162017');
+            
+            if (empty($sourceRows)) {
+                throw new \Exception("No data found in source table");
+            }
+
+            $orderData = [];
+            foreach ($sourceRows as $row) {
+                $orderNumber = $row['OrderNumber'] ?? null;
+                if ($orderNumber) {
+                    $orderData[$orderNumber][] = $row;
+                }
+            }
+
+            $processedCount = 0;
+            foreach ($orderData as $orderNumber => $oData) {
+                $finalOrderData = $this->prepareOrderData($orderNumber, $oData);
+                
+                // Check if order already exists
+                $existingOrder = $connection->select()
+                    ->from(['o' => 'sales_order'])
+                    ->where('o.increment_id = ?', $orderNumber);
+                $orderLastId = $connection->fetchOne($existingOrder);
+                
+                if ($orderLastId || empty($finalOrderData['otherData']['S_ShipVia'])) {
+                    continue;
+                }
+
+                $this->orderProcessor->createOrder($finalOrderData, $connection);
+                $processedCount++;
+            }
+
+            return true;
+        } catch (\Exception $e) {
+            throw new \Exception("Import error: " . $e->getMessage());
+        }
+    }
+
+    /**
+     * Prepare order data for processing
+     *
+     * @param string $orderNumber
+     * @param array $orderRows
+     * @return array
+     */
+    private function prepareOrderData(string $orderNumber, array $orderRows): array
+    {
+        $finalOrderData = [
+            'order_id' => $orderNumber,
+            'product_data' => [],
+            'customer_email' => '',
+            'otherData' => []
+        ];
+
+        foreach ($orderRows as $itemData) {
+            $finalOrderData['product_data'][] = [
+                'sku' => $itemData['InventoryID'] ?? '',
+                'qty' => $itemData['Quantity'] ?? 0,
+                'name' => $itemData['ProductName'] ?? '',
+                'price' => $itemData['UnitPrice'] ?? 0,
+                'weight' => $itemData['Weight'] ?? 0,
+                'default_price' => $itemData['UnitPrice'] ?? 0
+            ];
+
+            $finalOrderData['customer_email'] = $itemData['S_Email'] ?? $itemData['B_Email'] ?? '';
+            $finalOrderData['otherData'] = $itemData;
+        }
+
+        return $finalOrderData;
     }
 }
